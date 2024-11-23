@@ -1,0 +1,254 @@
+---
+title: "ch4.5 Curves from lines"
+format: html
+editor: source
+---
+
+## 4.5.1 Polynomial Regression
+```{r}
+library(rethinking)
+data("Howell1")
+d <- Howell1
+
+plot(height ~ weight, d)
+```
+```{r}
+d$weight_s <- (d$weight - mean(d$weight)) / sd(d$weight)
+d$weight_s2 <- d$weight_s^2
+m4.5 <- quap(
+  alist(
+    height ~ dnorm(mu, sigma),
+    mu <- a + b1*weight_s + b2*weight_s2,
+    a ~ dnorm(178, 20),
+    b1 ~ dnorm(0, 1),
+    b2 ~ dnorm(0, 1),
+    sigma ~ dunif(0, 50)
+  ),
+  data = d
+)
+
+precis(m4.5)
+
+```
+```{r}
+weight.seq <- seq(from = -2.2, to = 2, length.out = 30)
+pred_dat <- list(weight_s = weight.seq, weight_s2= weight.seq^2)
+mu <- link(m4.5, data = pred_dat)
+mu.mean <- apply(mu, 2, mean)
+mu.PI <- apply(mu, 2, PI, prob = 0.89)
+sim.height <- sim(m4.5, data = pred_dat)
+height.PI <- apply(sim.height, 2, PI, prob = 0.89)
+
+plot(height ~ weight_s, d, col = col.alpha(rangi2, 0.5))
+lines(weight.seq, mu.mean)
+shade(mu.PI, weight.seq)
+shade(height.PI, weight.seq)
+```
+
+```{r}
+d$weight_s3 <- d$weight_s^3
+m4.6 <- quap(
+  alist(
+    height ~ dnorm(mu,sigma),
+    mu <- a + b1*weight_s + b2*weight_s2 + b3*weight_s3,
+    a ~ dnorm(178, 20),
+    b1 ~ dlnorm(0, 1),
+    b2 ~ dnorm(0, 10),
+    b3 ~ dnorm(0, 10),
+    sigma ~ dunif(0, 50)
+  ), data = d
+)
+weight.seq <- seq(from = -2.2, to = 2, length.out = 30)
+pred_dat <- list(weight_s = weight.seq, weight_s2= weight.seq^2, weight_s3 = weight.seq^3)
+mu <- link(m4.6, data = pred_dat)
+mu.mean <- apply(mu, 2, mean)
+mu.PI <- apply(mu, 2, PI, prob = 0.89)
+sim.height <- sim(m4.6, data = pred_dat)
+height.PI <- apply(sim.height, 2, PI, prob = 0.89)
+
+plot(height ~ weight_s, d, col = col.alpha(rangi2, 0.5))
+lines(weight.seq, mu.mean)
+shade(mu.PI, weight.seq)
+shade(height.PI, weight.seq)
+```
+
+
+```{r}
+plot(height ~ weight_s, d, col = col.alpha(rangi2, 0.5), xaxt = "n")
+at <- c(-2, -1, 0, 1, 2)
+labels <- at*sd(d$weight) + mean(d$weight)
+axis(side = 1, at = at, labels = round(labels, 1) )
+```
+
+## 4.5.2 Splines
+
+```{r}
+library(rethinking)
+data(cherry_blossoms)
+d <- cherry_blossoms
+precis(d)
+```
+
+```{r}
+d2 <- d[complete.cases(d$doy), ] #complete cases on doy
+num_knots <- 15
+knot_list <- quantile(d2$year, probs = seq(0, 1, length.out = num_knots))
+
+library(splines)
+B <- bs(d2$year, 
+        knots = knot_list[-c(1, num_knots)],
+        degree = 3, 
+        intercept = T)
+
+plot(NULL, xlim = range(d2$year), ylim = c(0, 1), xlab = 'year', ylab = 'basis') 
+for (i in 1:ncol(B)) lines(d2$year, B[, i])
+```
+
+
+
+
+```{r}
+m4.7 <- quap(
+  alist(
+    D ~ dnorm(mu, sigma),
+    mu <- a + B %*% w,
+    a ~ dnorm(100, 10),
+    w ~ dnorm(0, 10),
+    sigma ~ dexp(1)
+  ), 
+  data = list( D = d2$doy, B = B), 
+  start=list(w=rep(0, ncol(B)))
+)
+
+post <- extract.samples(m4.7)
+```
+
+```{r}
+w <- apply(post$w, 2, mean)
+
+plot(NULL, xlim=range(d2$year), ylim = c(-6, 6),
+     xlab = 'year', ylab = 'basis * weight')
+for (i in 1:ncol(B)) lines(d2$year, w[i]*B[, i]) 
+
+mu <- link(m4.7)
+mu_PI <- apply(mu, 2, PI, 0.97)
+plot(d2$year, d2$doy, pch = 16, col = col.alpha(rangi2, 0.5))
+shade(mu_PI, d2$year, col = col.alpha("black", 0.5))
+```
+
+4E3. Using the model definition above, write down the appropriate form of Bayes’ theorem that includes the proper likelihood and priors.
+
+Pr(m, s|y) = (m|s)! / (m!, s!) * (y~i~)^m * (1-y~i~)^s-m * (s|a, b) * (a) * (b)
+
+
+4M1. For the model definition below, simulate observed y values from the prior (not the posterior).
+y~i∼ ~ Normal(μ,σ)
+μ ∼ Normal(0,10)
+σ ∼ Exponential(1)
+
+```{r}
+library(tidyverse)
+
+sim <- tibble(mu = rnorm(n = 1e2, mean = 0, sd = 10),
+              sigma = rexp(n = 1e2, rate = 1)) %>%
+  mutate(y = rnorm(n = 1e2, mean = mu, sd = sigma))
+
+ggplot(sim, aes(x = y)) +
+  geom_density() +
+  labs(x = "y", y = "Density")
+```
+
+4M2. Trasnlate the model just above into a quap formula.
+```{r}
+m2 <- quap(
+  alist(
+    y ~ dnorm(m, s),
+    m ~ dnorm(0, 10),
+    s ~ dexp(1)
+  ), data = sim
+)
+
+p <- extract.samples(m2)
+
+p %>%
+  ggplot(aes(m, s)) + geom_point()
+```
+
+4M3. Translate the quap model formula below into a mathematical model definition.
+
+```
+y ~ dnorm( mu , sigma ),
+mu <- a + b*x,
+a ~ dnorm( 0 , 10 ),
+b ~ dunif( 0 , 1 ),
+sigma ~ dexp( 1 )
+```
+y^i ∼ Normal(μ^i,σ)
+μ^i=α+βx^i
+α ∼ Normal(0,10)
+β ∼ Uniform(0,1)
+σ ∼ Exponential(1)
+
+4M4. A sample of students is measured for height each year for 3 years. After the third year, you want to fit a linear regression predicting height using year as a predictor. Write down the mathematical model definition for this regression, using any variable names and priors you choose. Be prepared to defend your choice of priors.
+
+y^i ∼ Normal(μ^i,σ)
+μ^i=α+βx^i
+α ∼ Normal(0,10)
+β ∼ Uniform(0,1)
+σ ∼ Exponential(1)
+
+```{r}
+n <- 50
+tibble(group = seq_len(n),
+       alpha = rnorm(n, 100, 10),
+       beta = rlnorm(n, 0, 10),
+       sigma = rexp(n, 1)) %>%
+  expand(nesting(group, alpha, beta, sigma), year = c(1, 2, 3)) %>%
+  mutate(height = rnorm(year, alpha + beta * (year - mean(year)), sigma)) %>%
+  ggplot(aes(x = year, y = height, group = group)) +
+  geom_line() +
+  geom_point() +
+  scale_x_continuous(breaks = c(1, 2, 3)) +
+  labs(x = "Year", y = "Height")
+```
+
+
+```{r}
+library(tidybayes)
+
+set.seed(123)
+samples <- rlnorm(1e8, 1, 0.5)
+bounds <- mean_hdi(samples, .width = 0.89)
+
+ggplot() +
+  stat_function(data = tibble(x = c(0, 10)), mapping = aes(x = x),
+                geom = "line", fun = dlnorm,
+                args = list(meanlog = 1, sdlog = 0.5)) +
+  geom_ribbon(data = tibble(x = seq(bounds$ymin, bounds$ymax, 0.01)),
+              aes(x = x, ymin = 0, ymax = dlnorm(x, 1, 0.5)),
+              alpha = 0.8) +
+  scale_x_continuous(breaks = seq(0, 10, 2)) +
+  labs(x = expression(beta), y = "Density")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
